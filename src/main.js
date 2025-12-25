@@ -25,61 +25,71 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(CONFIG.backgroundColor);
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 5000);
-camera.position.set(0, 0, 800);
+camera.position.set(0, 0, 900);
 camera.lookAt(0, 0, 0);
 
-// --- Grid Generation ---
-function createGridGeometry(size, spacing, resolution) {
-  const points = [];
+// --- Particle System Setup ---
+// 1. Geometry: A simple quad for the "Rod/Bar"
+// We'll scale it in the shader. Base size 1x1.
+const baseGeometry = new THREE.PlaneGeometry(1, 1);
 
-  // Horizontal Lines
-  for (let y = -size / 2; y <= size / 2; y += spacing) {
-    // Create a line from -size/2 to size/2
-    for (let x = -size / 2; x < size / 2; x += resolution) {
-      points.push(x, y, 0);
-      // LineSegments needs pairs, so the end of this segment is the start of next?
-      // To make a continuous line with LineSegments, we need (p1, p2), (p2, p3).
-      // Or we can use THREE.Line and create separate objects, but that's slow.
-      // Better: Use one huge LineSegments geometry where we explicitly duplicate internal vertices.
+// 2. Grid Position Data
+function getGridPositions(size, spacing) {
+  const positions = [];
+  // Center grid
+  const cols = Math.floor(size / spacing);
+  const rows = Math.floor(size / spacing);
+  const offsetX = - (cols * spacing) / 2;
+  const offsetY = - (rows * spacing) / 2;
 
-      const xNext = Math.min(x + resolution, size / 2);
-      points.push(xNext, y, 0);
+  // Random offset range (fraction of spacing)
+  const randomness = spacing * 0.6;
+
+  for (let i = 0; i < cols; i++) {
+    for (let j = 0; j < rows; j++) {
+      // Add random offset for organic feel
+      const randX = (Math.random() - 0.5) * randomness;
+      const randY = (Math.random() - 0.5) * randomness;
+      positions.push(
+        offsetX + i * spacing + randX,
+        offsetY + j * spacing + randY,
+        0 // Z
+      );
     }
   }
-
-  // Vertical Lines
-  for (let x = -size / 2; x <= size / 2; x += spacing) {
-    for (let y = -size / 2; y < size / 2; y += resolution) {
-      points.push(x, y, 0);
-      const yNext = Math.min(y + resolution, size / 2);
-      points.push(x, yNext, 0);
-    }
-  }
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
-  return geometry;
+  return new Float32Array(positions);
 }
 
-const geometry = createGridGeometry(CONFIG.gridSize, CONFIG.gridSpacing, CONFIG.lineResolution);
+const positions = getGridPositions(CONFIG.gridSize, CONFIG.gridSpacing);
+const instanceCount = positions.length / 3;
 
-// --- Material ---
-// We use a shader to distort the grid vertices based on mouse position
+const instancedMesh = new THREE.InstancedMesh(baseGeometry, null, instanceCount); // Material added later
+
+// Fill dummy matrices (positions mainly, scale/rotation handled in shader)
+const dummy = new THREE.Object3D();
+for (let i = 0; i < instanceCount; i++) {
+  dummy.position.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+  dummy.updateMatrix();
+  instancedMesh.setMatrixAt(i, dummy.matrix);
+}
+instancedMesh.instanceMatrix.needsUpdate = true;
+
+// --- Shader Material ---
 const material = new THREE.ShaderMaterial({
   uniforms: {
     uTime: { value: 0 },
     uMouse: { value: new THREE.Vector2(0, 0) },
-    uResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
-    uColor: { value: new THREE.Color(CONFIG.color) }
+    uColor: { value: new THREE.Color(CONFIG.color) },
   },
   vertexShader: `
     uniform float uTime;
     uniform vec2 uMouse;
     
-    varying float vIntensity; 
-    varying float vWave;
+    varying float vAlpha;
+    varying vec2 vUv;
+    varying vec2 vSize;
 
-    // --- 1. 引入 Simplex Noise 算法 (标准 GLSL 实现) ---
+    // --- Noise Functions ---
     vec3 permute(vec3 x) { return mod(((x*34.0)+1.0)*x, 289.0); }
     float snoise(vec2 v){
       const vec4 C = vec4(0.211324865405187, 0.366025403784439,
@@ -108,77 +118,200 @@ const material = new THREE.ShaderMaterial({
     }
 
     void main() {
-      vec3 pos = position;
+      vUv = uv;
       
-      // --- 2. 计算噪声场 ---
-      // 使用 position * 缩放系数 + 时间 来生成流动的噪声
-      // 这里的 0.0015 控制噪声的"颗粒度"（越小越平滑）
-      float noiseVal = snoise(pos.xy * 0.0010 + uTime * 0.2);
-      
-      // --- 3. 坐标扰动 (Domain Warping) ---
-      // 关键步骤：在计算距离之前，把点的位置根据噪声偏移一下
-      // 这会让原本是圆形的 distance 场变得扭曲
-      vec2 distortedPos = pos.xy + vec2(noiseVal * 100.0); // 200.0 是扭曲力度
+      // Get instance position from the matrix
+      // instanceMatrix is a mat4 attribute automatically provided by InstancedMesh
+      vec4 instancePos = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+      vec3 pos = instancePos.xyz;
 
-      // 使用扰动后的坐标计算距离
-      float dist = distance(distortedPos, uMouse);
+      // --- Noise & Wave Logic ---
+      float noiseVal = snoise(pos.xy * 0.0015 + uTime * 0.2);
       
-      // --- 4. 生成非正圆波浪 ---
-      // 依然使用 dist，但因为 dist 已经被扭曲了，所以波浪也是扭曲的
-      // 叠加一点 noiseVal 到相位中，让波浪不再是完美的正弦波
-      float wave = sin(dist * 0.02 - uTime * 3.0 + noiseVal * 2.0);
+      // Distance to mouse
+      // Add subtle wandering to dead zone center
+      vec2 wanderOffset = vec2(
+        sin(uTime * 0.8) * 20.0 + cos(uTime * 1.3) * 15.0,
+        cos(uTime * 0.6) * 20.0 + sin(uTime * 1.1) * 15.0
+      );
+      vec2 deadZoneCenter = uMouse + wanderOffset;
+      float dist = distance(pos.xy, deadZoneCenter);
       
-      // 叠加第二次噪声，制造表面的细碎褶皱（高频噪声）
-      float fineNoise = snoise(pos.xy * 0.01 - uTime * 0.5);
-      wave += fineNoise * 0.3; // 混合 30% 的细碎波纹
+      // === Dead Zone (Inner Radius) ===
+      // Waves start from this boundary, not the center
+      // Add noise to make the boundary organic
+      // Smaller core dead zone, larger transition
+      float innerRadius = 120.0 + noiseVal * 40.0;
+      float effectiveDist = max(0.0, dist - innerRadius);
+      
+      // Suppression factor: reduced inside dead zone, full outside
+      // Much larger transition zone (120px) for gradual fade
+      // Higher minimum (0.2) so content is always visible, just smaller/fainter
+      float suppressionFactor = 0.2 + 0.8 * smoothstep(0.0, 120.0, dist - innerRadius);
+      
+      // === Single Breathing Wave ===
+      // Wave peak position oscillates in/out (0 to maxRange)
+      // Much wider outer ring
+      float maxWaveRange = 400.0;
+      // sin oscillates -1 to 1, map to 0 to maxRange
+      float wavePeakPos = maxWaveRange * 0.5 * (1.0 + sin(uTime * 1.5));
+      
+      // === Domain Warping for Irregular Wave Shape ===
+      // Distort the distance field with noise to create organic shapes
+      // Use a different noise sample than before for variety
+      float warpNoise = snoise(pos.xy * 0.003 + uTime * 0.3);
+      float warpNoise2 = snoise(pos.xy * 0.007 - uTime * 0.2);
+      // Combine for more complexity
+      float distWarp = (warpNoise + warpNoise2 * 0.5) * 60.0;
+      
+      // Warped effective distance for wave calculation
+      float warpedEffectiveDist = effectiveDist + distWarp;
+      
+      // Distance from current point to the wave peak (using warped distance)
+      float distFromPeak = abs(warpedEffectiveDist - wavePeakPos);
+      
+      // Gaussian-like falloff for a single clean pulse
+      // Much wider wave for broader effect
+      float waveWidth = 180.0 + noiseVal * 40.0;
+      float wave = exp(-distFromPeak * distFromPeak / (waveWidth * waveWidth));
+      
+      // --- Energy & Appearance ---
+      // Envelope: slower decay for much wider visible ring
+      float envelope = max(0.0, 1.0 - effectiveDist * 0.0015); 
+      envelope = pow(envelope, 1.5);
 
-      vWave = wave;
-
-      // --- 5. 能量衰减 ---
-      // 能量计算还是基于原始的物理距离（让鼠标中心依然是最强的）
-      float trueDist = distance(pos.xy, uMouse);
-      float energy = max(0.0, 1.0 - trueDist * 0.0008);
-      // 让能量分布也稍微随机一点
-      energy *= (0.8 + 0.4 * noiseVal); 
+      // Combine wave peak with envelope
+      float waveEnergy = wave * envelope;
       
-      // 应用 Z 轴置换
-      pos.z += wave * 60.0 * energy;
+      // Base visibility: always visible within the ring (not dependent on wave)
+      // This prevents "all invisible" moments
+      float baseVisibility = 0.15 * envelope;
       
-      vIntensity = energy;
+      // Final: max of base visibility and wave-driven intensity
+      // Apply suppression (dead zone shows dots, not blank)
+      // Stronger wave peaks (reduced exponent)
+      float finalIntensity = max(baseVisibility, 0.05 + 0.95 * pow(waveEnergy, 1.0)) * suppressionFactor; 
 
-      gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(pos, 1.0);
+      // --- Rotation (Point to Mouse with Dynamic Offset) ---
+      vec2 dir = normalize(uMouse - pos.xy);
+      float baseAngle = atan(dir.y, dir.x);
+      
+      // Dynamic rotation offset based on position and time
+      // Each particle has unique phase based on its position
+      float rotationNoise = snoise(pos.xy * 0.005 + uTime * 0.5);
+      float rotationOffset = rotationNoise * 0.5; // ±0.5 radians (~28 degrees)
+      
+      float angle = baseAngle + rotationOffset;
+      
+      // Rotation Matrix (Z-axis)
+      // Fix: GLSL mat2 is column-major.
+      // We want to rotate by +angle.
+      // [ cos  -sin ]
+      // [ sin   cos ]
+      // Col 1: (cos, sin) -> (c, s)
+      // Col 2: (-sin, cos) -> (-s, c)
+      float c = cos(angle);
+      float s = sin(angle);
+      mat2 rot = mat2(c, s, -s, c);
+      
+      // --- Scaling (The "Rod" Shape) ---
+      // Base: 3x3 (Point-like when inactive)
+      // Max: ~15x5 (Shorter rods)
+      float len = 3.0 + 12.0 * finalIntensity; 
+      float thick = 3.0 + 2.0 * finalIntensity;
+      
+      // Pass size to fragment for SDF
+      vSize = vec2(len, thick);
+
+      // Apply scale to vertex position
+      vec3 transformed = position; 
+      transformed.x *= len;
+      transformed.y *= thick;
+      
+      // Apply Rotation
+      transformed.xy = rot * transformed.xy;
+      
+      // Move to instance position
+      transformed += pos;
+      
+      // === Radial Displacement (Push Effect) ===
+      // Push rods away from center based on wave energy
+      vec2 pushDir = normalize(pos.xy - uMouse);
+      // Stronger push when wave is high
+      float pushStrength = waveEnergy * 80.0;
+      transformed.xy += pushDir * pushStrength;
+      
+      // Add some Z-wave lift
+      transformed.z += wave * 70.0 * envelope;
+
+      vAlpha = finalIntensity;
+      
+      gl_Position = projectionMatrix * viewMatrix * vec4(transformed, 1.0);
     }
   `,
   fragmentShader: `
     uniform vec3 uColor;
-    varying float vIntensity;
-    varying float vWave;
+    varying float vAlpha;
+    varying vec2 vUv;
+    varying vec2 vSize;
     
+    // Signed Distance Function for Rounded Box
+    // p: point, b: half-extent (box size / 2 - radius), r: corner radius
+    float sdRoundedBox( in vec2 p, in vec2 b, in float r ) {
+        vec2 q = abs(p) - b;
+        return length(max(q,0.0)) + min(max(q.x,q.y),0.0) - r;
+    }
+
     void main() {
+      // Convert UV to Local Coordinate Space (Physical size)
+      vec2 p = (vUv * 2.0 - 1.0) * vSize * 0.5;
+      
+      // Determine Radius for full roundness (Capsule style)
+      // Radius = half height
+      float r = vSize.y * 0.5;
+      
+      // Box half-extent
+      // Width needs to shrink by r to accommodate the round caps
+      // Height needs to shrink by r? No, box extent is dist from center to flat edge.
+      // If we want total height = vSize.y, and radius = vSize.y/2, then vertical straight segment is 0.
+      vec2 b = vec2(vSize.x * 0.5 - r, 0.0);
+      
+      // However, if size.x < size.y (short rod), this might behave oddly.
+      // Let's ensure b.x >= 0.
+      if (b.x < 0.0) {
+        // Just a circle/squircle if very short
+        r = min(vSize.x, vSize.y) * 0.5;
+        b = vSize * 0.5 - r;
+      }
+
+      float dist = sdRoundedBox(p, b, r);
+      
+      // Smooth edges (aa)
+      float smoothness = 1.0; // 1 pixel blur for AA
+      float alphaShape = 1.0 - smoothstep(-0.5, 0.5, dist); 
+      
       vec3 col = uColor;
       
-      // 归一化波浪
-      float waveNorm = (vWave + 1.0) * 0.5;
+      // Opacity correlation + Shape Cutout
+      float alpha = vAlpha * alphaShape;
       
-      // 增加对比度，提取高光
-      float waveContrast = pow(waveNorm, 4.0); // 增加指数，让高光更细锐
-      
-      // 基础透明度 + 动态高光
-      float alpha = 0.1 + 0.9 * vIntensity * waveContrast;
+      if (alpha < 0.01) discard; 
 
-      // 颜色混合
-      col = mix(col, vec3(1.0), vIntensity * waveContrast * 0.8);
+      // Boost brightness for high alpha
+      if (vAlpha > 0.5) {
+         col += vec3(0.5) * (vAlpha - 0.5);
+      }
 
       gl_FragColor = vec4(col, alpha);
     }
   `,
   transparent: true,
   depthWrite: false,
-  // 使用 lineLoop 或 lines 时，linewidth 在很多浏览器（如 Chrome Windows）限制为 1
-  // 这里主要靠透明度变化来体现视觉厚度
 });
-const gridLines = new THREE.LineSegments(geometry, material);
-scene.add(gridLines);
+
+instancedMesh.material = material;
+scene.add(instancedMesh);
+
 
 // --- Interaction ---
 const mouse = new THREE.Vector2(0, 0);
@@ -189,11 +322,9 @@ const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 window.addEventListener('mousemove', (e) => {
   const ncX = (e.clientX / window.innerWidth) * 2 - 1;
   const ncY = -(e.clientY / window.innerHeight) * 2 + 1;
-
   raycaster.setFromCamera(new THREE.Vector2(ncX, ncY), camera);
   const intersect = new THREE.Vector3();
   raycaster.ray.intersectPlane(plane, intersect);
-
   targetMouse.copy(intersect);
 });
 
@@ -206,12 +337,9 @@ window.addEventListener('resize', () => {
 // --- Animate ---
 function animate() {
   requestAnimationFrame(animate);
-
-  mouse.lerp(targetMouse, 0.1); // Smooth mouse follow
-
+  mouse.lerp(targetMouse, 0.03); // More lag for fluid feel
   material.uniforms.uMouse.value.copy(mouse);
   material.uniforms.uTime.value = performance.now() * 0.001;
-
   renderer.render(scene, camera);
 }
 
