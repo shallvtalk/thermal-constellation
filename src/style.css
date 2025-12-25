@@ -1,0 +1,58 @@
+:root {
+  --font-main: 'Outfit', sans-serif;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-main);
+  background-color: #f4f7f6;
+  color: #2c3e50;
+  overflow: hidden;
+  width: 100vw;
+  height: 100vh;
+}
+
+#canvas-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+.ui-overlay {
+  position: absolute;
+  bottom: 3rem;
+  left: 3rem;
+  z-index: 10;
+  pointer-events: none;
+  /* Removed mix-blend-mode for better control on light bg */
+}
+
+h1 {
+  font-size: 3rem;
+  letter-spacing: -2px;
+  line-height: 1;
+  text-transform: uppercase;
+  margin-bottom: 0.5rem;
+}
+
+.accent {
+  background: linear-gradient(45deg, #3b66f2, #00f2ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-style: italic;
+}
+
+p {
+  font-size: 0.875rem;
+  color: rgba(44, 62, 80, 0.6);
+  letter-spacing: 1px;
+}
