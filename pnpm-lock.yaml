@@ -11,6 +11,9 @@ importers:
       '@mediapipe/tasks-vision':
         specifier: ^0.10.22-rc.20250304
         version: 0.10.22-rc.20250304
+      lil-gui:
+        specifier: ^0.21.0
+        version: 0.21.0
       three:
         specifier: ^0.182.0
         version: 0.182.0
@@ -312,6 +315,9 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
+  lil-gui@0.21.0:
+    resolution: {integrity: sha512-tpvxN7v1GvE/Tv+GRopfOp0W7fVEjF4PltkuX8vOCIfim22rD1ztvfkoEMcv9lzQeuNUSeIrUmUjBwmlW/oUew==}
+
   nanoid@3.3.11:
     resolution: {integrity: sha512-N8SpfPUnUp1bK+PMYW8qSWdl9U+wwNWI4QKxOYDy9JAro3WMX7p2OeVRF9v+347pnakNevPmiHhNmZ2HbFA76w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
@@ -569,6 +575,8 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  lil-gui@0.21.0: {}
 
   nanoid@3.3.11: {}
 

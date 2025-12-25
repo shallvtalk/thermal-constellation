@@ -1,17 +1,95 @@
 import './style.css'
 import * as THREE from 'three';
+import GUI from 'lil-gui';
 
-// --- Configuration ---
+// ============================================================================
+// 配置参数 - 所有可调节的系数都在这里
+// ============================================================================
 const CONFIG = {
-  gridSpacing: 40,
-  gridSize: 3000,
-  lineResolution: 5, // Vertices density on lines
-  color: 0x3b66f2,
-  backgroundColor: 0xf4f7f6,
-  gravityStrength: 50.0, // Z-displacement
+  // --- 基础设置 ---
+  gridSpacing: 40,              // 网格间距 (像素)
+  gridSize: 3000,               // 网格总大小 (像素)
+  positionRandomness: 0.6,      // 位置随机偏移 (相对于间距的比例, 0-1)
+  color: 0x3b66f2,              // 短棒颜色 (十六进制)
+  backgroundColor: 0xf4f7f6,    // 背景颜色 (十六进制)
+
+  // --- 鼠标跟随 ---
+  mouseLerpSpeed: 0.03,         // 鼠标跟随的平滑系数 (0-1, 越小越慢)
+
+  // --- 死区 (中心透明区域) ---
+  deadZone: {
+    baseRadius: 120.0,          // 死区基础半径 (像素)
+    noiseAmplitude: 40.0,       // 死区边界的噪声振幅 (像素)
+    transitionWidth: 120.0,     // 死区到外环的过渡宽度 (像素)
+    minVisibility: 0.2,         // 死区内的最低可见度 (0-1)
+    wanderAmplitude: 20.0,      // 死区中心漂移的振幅 (像素)
+    wanderSpeed1: 0.8,          // 死区中心漂移速度1
+    wanderSpeed2: 0.6,          // 死区中心漂移速度2
+  },
+
+  // --- 波浪 ---
+  wave: {
+    maxRange: 400.0,            // 波浪活动的最大范围 (像素)
+    speed: 1.5,                 // 波浪呼吸速度
+    baseWidth: 180.0,           // 波浪宽度基础值 (像素)
+    widthNoise: 40.0,           // 波浪宽度的噪声振幅 (像素)
+    warpStrength: 60.0,         // 波浪形状扭曲强度 (像素)
+    warpScale1: 0.003,          // 扭曲噪声的缩放系数1
+    warpScale2: 0.007,          // 扭曲噪声的缩放系数2
+    warpSpeed1: 0.3,            // 扭曲噪声的流动速度1
+    warpSpeed2: 0.2,            // 扭曲噪声的流动速度2
+  },
+
+  // --- 能量衰减 ---
+  envelope: {
+    decayRate: 0.0015,          // 能量衰减率 (越大衰减越快)
+    power: 1.5,                 // 能量曲线指数
+  },
+
+  // --- 短棒旋转 ---
+  rotation: {
+    noiseScale: 0.005,          // 旋转噪声的缩放系数
+    noiseSpeed: 0.5,            // 旋转噪声的速度
+    maxOffset: 0.5,             // 最大旋转偏移 (弧度, ~28度)
+  },
+
+  // --- 短棒尺寸 ---
+  rod: {
+    baseLength: 3.0,            // 基础长度 (像素)
+    maxLengthAdd: 12.0,         // 最大额外长度 (像素)
+    baseThickness: 3.0,         // 基础粗细 (像素)
+    maxThicknessAdd: 2.0,       // 最大额外粗细 (像素)
+  },
+
+  // --- 位移效果 ---
+  displacement: {
+    pushStrength: 80.0,         // 推力强度 (像素)
+    zLift: 70.0,                // Z轴抬升高度 (像素)
+  },
+
+  // --- 基础噪声 ---
+  baseNoise: {
+    scale: 0.0015,              // 基础噪声缩放
+    speed: 0.2,                 // 基础噪声流动速度
+  },
+
+  // --- 可见度 ---
+  visibility: {
+    base: 0.15,                 // 基础可见度 (防止全部消失)
+    waveMin: 0.05,              // 波浪最低可见度
+    waveMax: 0.95,              // 波浪最高可见度增益
+  },
+
+  // --- 高亮 ---
+  highlight: {
+    threshold: 0.5,             // 高亮触发阈值
+    boost: 0.5,                 // 高亮增益
+  },
 };
 
-// --- Scene ---
+// ============================================================================
+// 场景初始化
+// ============================================================================
 const container = document.querySelector('#canvas-container');
 const renderer = new THREE.WebGLRenderer({
   antialias: true,
@@ -28,44 +106,43 @@ const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerH
 camera.position.set(0, 0, 900);
 camera.lookAt(0, 0, 0);
 
-// --- Particle System Setup ---
-// 1. Geometry: A simple quad for the "Rod/Bar"
-// We'll scale it in the shader. Base size 1x1.
+// ============================================================================
+// 粒子系统设置
+// ============================================================================
+
+// 基础几何体：一个简单的四边形，用于短棒
 const baseGeometry = new THREE.PlaneGeometry(1, 1);
 
-// 2. Grid Position Data
-function getGridPositions(size, spacing) {
+// 生成网格位置数据
+function getGridPositions(size, spacing, randomnessFactor) {
   const positions = [];
-  // Center grid
   const cols = Math.floor(size / spacing);
   const rows = Math.floor(size / spacing);
-  const offsetX = - (cols * spacing) / 2;
-  const offsetY = - (rows * spacing) / 2;
-
-  // Random offset range (fraction of spacing)
-  const randomness = spacing * 0.6;
+  const offsetX = -(cols * spacing) / 2;
+  const offsetY = -(rows * spacing) / 2;
+  const randomness = spacing * randomnessFactor;
 
   for (let i = 0; i < cols; i++) {
     for (let j = 0; j < rows; j++) {
-      // Add random offset for organic feel
+      // 添加随机偏移以获得有机感
       const randX = (Math.random() - 0.5) * randomness;
       const randY = (Math.random() - 0.5) * randomness;
       positions.push(
         offsetX + i * spacing + randX,
         offsetY + j * spacing + randY,
-        0 // Z
+        0
       );
     }
   }
   return new Float32Array(positions);
 }
 
-const positions = getGridPositions(CONFIG.gridSize, CONFIG.gridSpacing);
+const positions = getGridPositions(CONFIG.gridSize, CONFIG.gridSpacing, CONFIG.positionRandomness);
 const instanceCount = positions.length / 3;
 
-const instancedMesh = new THREE.InstancedMesh(baseGeometry, null, instanceCount); // Material added later
+const instancedMesh = new THREE.InstancedMesh(baseGeometry, null, instanceCount);
 
-// Fill dummy matrices (positions mainly, scale/rotation handled in shader)
+// 填充实例矩阵
 const dummy = new THREE.Object3D();
 for (let i = 0; i < instanceCount; i++) {
   dummy.position.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
@@ -74,22 +151,109 @@ for (let i = 0; i < instanceCount; i++) {
 }
 instancedMesh.instanceMatrix.needsUpdate = true;
 
-// --- Shader Material ---
+// ============================================================================
+// 着色器材质
+// ============================================================================
 const material = new THREE.ShaderMaterial({
   uniforms: {
     uTime: { value: 0 },
     uMouse: { value: new THREE.Vector2(0, 0) },
     uColor: { value: new THREE.Color(CONFIG.color) },
+    // 死区参数
+    uDeadZoneRadius: { value: CONFIG.deadZone.baseRadius },
+    uDeadZoneNoise: { value: CONFIG.deadZone.noiseAmplitude },
+    uDeadZoneTransition: { value: CONFIG.deadZone.transitionWidth },
+    uDeadZoneMinVis: { value: CONFIG.deadZone.minVisibility },
+    uWanderAmp: { value: CONFIG.deadZone.wanderAmplitude },
+    uWanderSpeed1: { value: CONFIG.deadZone.wanderSpeed1 },
+    uWanderSpeed2: { value: CONFIG.deadZone.wanderSpeed2 },
+    // 波浪参数
+    uWaveMaxRange: { value: CONFIG.wave.maxRange },
+    uWaveSpeed: { value: CONFIG.wave.speed },
+    uWaveWidth: { value: CONFIG.wave.baseWidth },
+    uWaveWidthNoise: { value: CONFIG.wave.widthNoise },
+    uWarpStrength: { value: CONFIG.wave.warpStrength },
+    uWarpScale1: { value: CONFIG.wave.warpScale1 },
+    uWarpScale2: { value: CONFIG.wave.warpScale2 },
+    uWarpSpeed1: { value: CONFIG.wave.warpSpeed1 },
+    uWarpSpeed2: { value: CONFIG.wave.warpSpeed2 },
+    // 能量衰减参数
+    uEnvelopeDecay: { value: CONFIG.envelope.decayRate },
+    uEnvelopePower: { value: CONFIG.envelope.power },
+    // 旋转参数
+    uRotNoiseScale: { value: CONFIG.rotation.noiseScale },
+    uRotNoiseSpeed: { value: CONFIG.rotation.noiseSpeed },
+    uRotMaxOffset: { value: CONFIG.rotation.maxOffset },
+    // 短棒尺寸参数
+    uRodBaseLen: { value: CONFIG.rod.baseLength },
+    uRodMaxLen: { value: CONFIG.rod.maxLengthAdd },
+    uRodBaseThick: { value: CONFIG.rod.baseThickness },
+    uRodMaxThick: { value: CONFIG.rod.maxThicknessAdd },
+    // 位移参数
+    uPushStrength: { value: CONFIG.displacement.pushStrength },
+    uZLift: { value: CONFIG.displacement.zLift },
+    // 基础噪声参数
+    uBaseNoiseScale: { value: CONFIG.baseNoise.scale },
+    uBaseNoiseSpeed: { value: CONFIG.baseNoise.speed },
+    // 可见度参数
+    uVisBase: { value: CONFIG.visibility.base },
+    uVisWaveMin: { value: CONFIG.visibility.waveMin },
+    uVisWaveMax: { value: CONFIG.visibility.waveMax },
+    // 高亮参数
+    uHighlightThreshold: { value: CONFIG.highlight.threshold },
+    uHighlightBoost: { value: CONFIG.highlight.boost },
   },
   vertexShader: `
+    // === Uniforms ===
     uniform float uTime;
     uniform vec2 uMouse;
+    // 死区
+    uniform float uDeadZoneRadius;
+    uniform float uDeadZoneNoise;
+    uniform float uDeadZoneTransition;
+    uniform float uDeadZoneMinVis;
+    uniform float uWanderAmp;
+    uniform float uWanderSpeed1;
+    uniform float uWanderSpeed2;
+    // 波浪
+    uniform float uWaveMaxRange;
+    uniform float uWaveSpeed;
+    uniform float uWaveWidth;
+    uniform float uWaveWidthNoise;
+    uniform float uWarpStrength;
+    uniform float uWarpScale1;
+    uniform float uWarpScale2;
+    uniform float uWarpSpeed1;
+    uniform float uWarpSpeed2;
+    // 能量
+    uniform float uEnvelopeDecay;
+    uniform float uEnvelopePower;
+    // 旋转
+    uniform float uRotNoiseScale;
+    uniform float uRotNoiseSpeed;
+    uniform float uRotMaxOffset;
+    // 短棒尺寸
+    uniform float uRodBaseLen;
+    uniform float uRodMaxLen;
+    uniform float uRodBaseThick;
+    uniform float uRodMaxThick;
+    // 位移
+    uniform float uPushStrength;
+    uniform float uZLift;
+    // 基础噪声
+    uniform float uBaseNoiseScale;
+    uniform float uBaseNoiseSpeed;
+    // 可见度
+    uniform float uVisBase;
+    uniform float uVisWaveMin;
+    uniform float uVisWaveMax;
     
+    // === Varyings ===
     varying float vAlpha;
     varying vec2 vUv;
     varying vec2 vSize;
 
-    // --- Noise Functions ---
+    // === Simplex Noise 函数 ===
     vec3 permute(vec3 x) { return mod(((x*34.0)+1.0)*x, 289.0); }
     float snoise(vec2 v){
       const vec4 C = vec4(0.211324865405187, 0.366025403784439,
@@ -120,129 +284,100 @@ const material = new THREE.ShaderMaterial({
     void main() {
       vUv = uv;
       
-      // Get instance position from the matrix
-      // instanceMatrix is a mat4 attribute automatically provided by InstancedMesh
+      // 获取实例位置
       vec4 instancePos = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
       vec3 pos = instancePos.xyz;
 
-      // --- Noise & Wave Logic ---
-      float noiseVal = snoise(pos.xy * 0.0015 + uTime * 0.2);
+      // === 基础噪声 ===
+      float noiseVal = snoise(pos.xy * uBaseNoiseScale + uTime * uBaseNoiseSpeed);
       
-      // Distance to mouse
-      // Add subtle wandering to dead zone center
+      // === 死区中心漂移 ===
       vec2 wanderOffset = vec2(
-        sin(uTime * 0.8) * 20.0 + cos(uTime * 1.3) * 15.0,
-        cos(uTime * 0.6) * 20.0 + sin(uTime * 1.1) * 15.0
+        sin(uTime * uWanderSpeed1) * uWanderAmp + cos(uTime * (uWanderSpeed1 + 0.5)) * uWanderAmp * 0.75,
+        cos(uTime * uWanderSpeed2) * uWanderAmp + sin(uTime * (uWanderSpeed2 + 0.5)) * uWanderAmp * 0.75
       );
       vec2 deadZoneCenter = uMouse + wanderOffset;
       float dist = distance(pos.xy, deadZoneCenter);
       
-      // === Dead Zone (Inner Radius) ===
-      // Waves start from this boundary, not the center
-      // Add noise to make the boundary organic
-      // Smaller core dead zone, larger transition
-      float innerRadius = 120.0 + noiseVal * 40.0;
+      // === 死区计算 ===
+      float innerRadius = uDeadZoneRadius + noiseVal * uDeadZoneNoise;
       float effectiveDist = max(0.0, dist - innerRadius);
       
-      // Suppression factor: reduced inside dead zone, full outside
-      // Much larger transition zone (120px) for gradual fade
-      // Higher minimum (0.2) so content is always visible, just smaller/fainter
-      float suppressionFactor = 0.2 + 0.8 * smoothstep(0.0, 120.0, dist - innerRadius);
+      // 抑制因子：死区内减弱，死区外完全显示
+      float suppressionFactor = uDeadZoneMinVis + (1.0 - uDeadZoneMinVis) * smoothstep(0.0, uDeadZoneTransition, dist - innerRadius);
       
-      // === Single Breathing Wave ===
-      // Wave peak position oscillates in/out (0 to maxRange)
-      // Much wider outer ring
-      float maxWaveRange = 400.0;
-      // sin oscillates -1 to 1, map to 0 to maxRange
-      float wavePeakPos = maxWaveRange * 0.5 * (1.0 + sin(uTime * 1.5));
+      // === 波浪计算 ===
+      // 波峰位置在 0 到 maxRange 之间振荡
+      float wavePeakPos = uWaveMaxRange * 0.5 * (1.0 + sin(uTime * uWaveSpeed));
       
-      // === Domain Warping for Irregular Wave Shape ===
-      // Distort the distance field with noise to create organic shapes
-      // Use a different noise sample than before for variety
-      float warpNoise = snoise(pos.xy * 0.003 + uTime * 0.3);
-      float warpNoise2 = snoise(pos.xy * 0.007 - uTime * 0.2);
-      // Combine for more complexity
-      float distWarp = (warpNoise + warpNoise2 * 0.5) * 60.0;
+      // 域扭曲：使波浪形状不规则
+      float warpNoise = snoise(pos.xy * uWarpScale1 + uTime * uWarpSpeed1);
+      float warpNoise2 = snoise(pos.xy * uWarpScale2 - uTime * uWarpSpeed2);
+      float distWarp = (warpNoise + warpNoise2 * 0.5) * uWarpStrength;
       
-      // Warped effective distance for wave calculation
+      // 扭曲后的有效距离
       float warpedEffectiveDist = effectiveDist + distWarp;
       
-      // Distance from current point to the wave peak (using warped distance)
+      // 到波峰的距离
       float distFromPeak = abs(warpedEffectiveDist - wavePeakPos);
       
-      // Gaussian-like falloff for a single clean pulse
-      // Much wider wave for broader effect
-      float waveWidth = 180.0 + noiseVal * 40.0;
-      float wave = exp(-distFromPeak * distFromPeak / (waveWidth * waveWidth));
+      // 高斯衰减形成单个脉冲
+      float waveWidthVal = uWaveWidth + noiseVal * uWaveWidthNoise;
+      float wave = exp(-distFromPeak * distFromPeak / (waveWidthVal * waveWidthVal));
       
-      // --- Energy & Appearance ---
-      // Envelope: slower decay for much wider visible ring
-      float envelope = max(0.0, 1.0 - effectiveDist * 0.0015); 
-      envelope = pow(envelope, 1.5);
+      // === 能量衰减 ===
+      float envelope = max(0.0, 1.0 - effectiveDist * uEnvelopeDecay); 
+      envelope = pow(envelope, uEnvelopePower);
 
-      // Combine wave peak with envelope
+      // 波浪能量
       float waveEnergy = wave * envelope;
       
-      // Base visibility: always visible within the ring (not dependent on wave)
-      // This prevents "all invisible" moments
-      float baseVisibility = 0.15 * envelope;
+      // 基础可见度（防止全部消失）
+      float baseVisibility = uVisBase * envelope;
       
-      // Final: max of base visibility and wave-driven intensity
-      // Apply suppression (dead zone shows dots, not blank)
-      // Stronger wave peaks (reduced exponent)
-      float finalIntensity = max(baseVisibility, 0.05 + 0.95 * pow(waveEnergy, 1.0)) * suppressionFactor; 
+      // 最终强度
+      float finalIntensity = max(baseVisibility, uVisWaveMin + uVisWaveMax * pow(waveEnergy, 1.0)) * suppressionFactor; 
 
-      // --- Rotation (Point to Mouse with Dynamic Offset) ---
+      // === 旋转（指向鼠标 + 动态偏移）===
       vec2 dir = normalize(uMouse - pos.xy);
       float baseAngle = atan(dir.y, dir.x);
       
-      // Dynamic rotation offset based on position and time
-      // Each particle has unique phase based on its position
-      float rotationNoise = snoise(pos.xy * 0.005 + uTime * 0.5);
-      float rotationOffset = rotationNoise * 0.5; // ±0.5 radians (~28 degrees)
+      // 基于位置和时间的旋转噪声
+      float rotationNoise = snoise(pos.xy * uRotNoiseScale + uTime * uRotNoiseSpeed);
+      float rotationOffset = rotationNoise * uRotMaxOffset;
       
       float angle = baseAngle + rotationOffset;
       
-      // Rotation Matrix (Z-axis)
-      // Fix: GLSL mat2 is column-major.
-      // We want to rotate by +angle.
-      // [ cos  -sin ]
-      // [ sin   cos ]
-      // Col 1: (cos, sin) -> (c, s)
-      // Col 2: (-sin, cos) -> (-s, c)
+      // 旋转矩阵
       float c = cos(angle);
       float s = sin(angle);
       mat2 rot = mat2(c, s, -s, c);
       
-      // --- Scaling (The "Rod" Shape) ---
-      // Base: 3x3 (Point-like when inactive)
-      // Max: ~15x5 (Shorter rods)
-      float len = 3.0 + 12.0 * finalIntensity; 
-      float thick = 3.0 + 2.0 * finalIntensity;
+      // === 短棒尺寸 ===
+      float len = uRodBaseLen + uRodMaxLen * finalIntensity; 
+      float thick = uRodBaseThick + uRodMaxThick * finalIntensity;
       
-      // Pass size to fragment for SDF
+      // 传递尺寸到片段着色器
       vSize = vec2(len, thick);
 
-      // Apply scale to vertex position
+      // 应用缩放
       vec3 transformed = position; 
       transformed.x *= len;
       transformed.y *= thick;
       
-      // Apply Rotation
+      // 应用旋转
       transformed.xy = rot * transformed.xy;
       
-      // Move to instance position
+      // 移动到实例位置
       transformed += pos;
       
-      // === Radial Displacement (Push Effect) ===
-      // Push rods away from center based on wave energy
+      // === 径向位移（推力效果）===
       vec2 pushDir = normalize(pos.xy - uMouse);
-      // Stronger push when wave is high
-      float pushStrength = waveEnergy * 80.0;
+      float pushStrength = waveEnergy * uPushStrength;
       transformed.xy += pushDir * pushStrength;
       
-      // Add some Z-wave lift
-      transformed.z += wave * 70.0 * envelope;
+      // Z轴抬升
+      transformed.z += wave * uZLift * envelope;
 
       vAlpha = finalIntensity;
       
@@ -251,55 +386,50 @@ const material = new THREE.ShaderMaterial({
   `,
   fragmentShader: `
     uniform vec3 uColor;
+    uniform float uHighlightThreshold;
+    uniform float uHighlightBoost;
+    
     varying float vAlpha;
     varying vec2 vUv;
     varying vec2 vSize;
     
-    // Signed Distance Function for Rounded Box
-    // p: point, b: half-extent (box size / 2 - radius), r: corner radius
+    // 圆角矩形 SDF
     float sdRoundedBox( in vec2 p, in vec2 b, in float r ) {
         vec2 q = abs(p) - b;
         return length(max(q,0.0)) + min(max(q.x,q.y),0.0) - r;
     }
 
     void main() {
-      // Convert UV to Local Coordinate Space (Physical size)
+      // 转换 UV 到本地坐标空间
       vec2 p = (vUv * 2.0 - 1.0) * vSize * 0.5;
       
-      // Determine Radius for full roundness (Capsule style)
-      // Radius = half height
+      // 圆角半径（胶囊形状）
       float r = vSize.y * 0.5;
       
-      // Box half-extent
-      // Width needs to shrink by r to accommodate the round caps
-      // Height needs to shrink by r? No, box extent is dist from center to flat edge.
-      // If we want total height = vSize.y, and radius = vSize.y/2, then vertical straight segment is 0.
+      // 盒子半范围
       vec2 b = vec2(vSize.x * 0.5 - r, 0.0);
       
-      // However, if size.x < size.y (short rod), this might behave oddly.
-      // Let's ensure b.x >= 0.
+      // 处理短棒过短的情况
       if (b.x < 0.0) {
-        // Just a circle/squircle if very short
         r = min(vSize.x, vSize.y) * 0.5;
         b = vSize * 0.5 - r;
       }
 
       float dist = sdRoundedBox(p, b, r);
       
-      // Smooth edges (aa)
-      float smoothness = 1.0; // 1 pixel blur for AA
+      // 平滑边缘（抗锯齿）
       float alphaShape = 1.0 - smoothstep(-0.5, 0.5, dist); 
       
       vec3 col = uColor;
       
-      // Opacity correlation + Shape Cutout
+      // 形状裁剪 + 透明度
       float alpha = vAlpha * alphaShape;
       
       if (alpha < 0.01) discard; 
 
-      // Boost brightness for high alpha
-      if (vAlpha > 0.5) {
-         col += vec3(0.5) * (vAlpha - 0.5);
+      // 高亮效果
+      if (vAlpha > uHighlightThreshold) {
+         col += vec3(uHighlightBoost) * (vAlpha - uHighlightThreshold);
       }
 
       gl_FragColor = vec4(col, alpha);
@@ -312,8 +442,9 @@ const material = new THREE.ShaderMaterial({
 instancedMesh.material = material;
 scene.add(instancedMesh);
 
-
-// --- Interaction ---
+// ============================================================================
+// 交互
+// ============================================================================
 const mouse = new THREE.Vector2(0, 0);
 const targetMouse = new THREE.Vector2(0, 0);
 const raycaster = new THREE.Raycaster();
@@ -334,13 +465,179 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// --- Animate ---
+// ============================================================================
+// 动画循环
+// ============================================================================
+
+// 面板状态
+let isPanelOpen = false;
+
 function animate() {
   requestAnimationFrame(animate);
-  mouse.lerp(targetMouse, 0.03); // More lag for fluid feel
+
+  // 面板打开时暂停鼠标跟随
+  if (!isPanelOpen) {
+    mouse.lerp(targetMouse, CONFIG.mouseLerpSpeed);
+  }
+
+  // 更新 uniforms
   material.uniforms.uMouse.value.copy(mouse);
   material.uniforms.uTime.value = performance.now() * 0.001;
+
   renderer.render(scene, camera);
 }
 
 animate();
+
+// ============================================================================
+// GUI 控制面板
+// ============================================================================
+const gui = new GUI({ title: '🎛️ 参数调节面板' });
+
+// 默认收起面板
+gui.close();
+
+// 监听面板打开/关闭状态
+gui.onOpenClose((opened) => {
+  isPanelOpen = !gui._closed;
+});
+
+// 辅助函数：更新 uniform
+function updateUniform(name, value) {
+  if (material.uniforms[name]) {
+    material.uniforms[name].value = value;
+  }
+}
+
+// --- 死区设置 ---
+const deadZoneFolder = gui.addFolder('🔵 死区 (Dead Zone)');
+deadZoneFolder.add(CONFIG.deadZone, 'baseRadius', 0, 400, 1)
+  .name('基础半径')
+  .onChange(v => updateUniform('uDeadZoneRadius', v));
+deadZoneFolder.add(CONFIG.deadZone, 'noiseAmplitude', 0, 100, 1)
+  .name('噪声振幅')
+  .onChange(v => updateUniform('uDeadZoneNoise', v));
+deadZoneFolder.add(CONFIG.deadZone, 'transitionWidth', 10, 300, 1)
+  .name('过渡宽度')
+  .onChange(v => updateUniform('uDeadZoneTransition', v));
+deadZoneFolder.add(CONFIG.deadZone, 'minVisibility', 0, 1, 0.01)
+  .name('最低可见度')
+  .onChange(v => updateUniform('uDeadZoneMinVis', v));
+deadZoneFolder.add(CONFIG.deadZone, 'wanderAmplitude', 0, 100, 1)
+  .name('漂移振幅')
+  .onChange(v => updateUniform('uWanderAmp', v));
+deadZoneFolder.add(CONFIG.deadZone, 'wanderSpeed1', 0, 3, 0.1)
+  .name('漂移速度1')
+  .onChange(v => updateUniform('uWanderSpeed1', v));
+deadZoneFolder.add(CONFIG.deadZone, 'wanderSpeed2', 0, 3, 0.1)
+  .name('漂移速度2')
+  .onChange(v => updateUniform('uWanderSpeed2', v));
+
+// --- 波浪设置 ---
+const waveFolder = gui.addFolder('🌊 波浪 (Wave)');
+waveFolder.add(CONFIG.wave, 'maxRange', 100, 800, 10)
+  .name('最大范围')
+  .onChange(v => updateUniform('uWaveMaxRange', v));
+waveFolder.add(CONFIG.wave, 'speed', 0.1, 5, 0.1)
+  .name('呼吸速度')
+  .onChange(v => updateUniform('uWaveSpeed', v));
+waveFolder.add(CONFIG.wave, 'baseWidth', 50, 400, 10)
+  .name('波浪宽度')
+  .onChange(v => updateUniform('uWaveWidth', v));
+waveFolder.add(CONFIG.wave, 'widthNoise', 0, 100, 5)
+  .name('宽度噪声')
+  .onChange(v => updateUniform('uWaveWidthNoise', v));
+waveFolder.add(CONFIG.wave, 'warpStrength', 0, 200, 5)
+  .name('扭曲强度')
+  .onChange(v => updateUniform('uWarpStrength', v));
+waveFolder.add(CONFIG.wave, 'warpSpeed1', 0, 1, 0.05)
+  .name('扭曲速度1')
+  .onChange(v => updateUniform('uWarpSpeed1', v));
+waveFolder.add(CONFIG.wave, 'warpSpeed2', 0, 1, 0.05)
+  .name('扭曲速度2')
+  .onChange(v => updateUniform('uWarpSpeed2', v));
+
+// --- 能量衰减 ---
+const envelopeFolder = gui.addFolder('📉 能量衰减 (Envelope)');
+envelopeFolder.add(CONFIG.envelope, 'decayRate', 0.0001, 0.01, 0.0001)
+  .name('衰减率')
+  .onChange(v => updateUniform('uEnvelopeDecay', v));
+envelopeFolder.add(CONFIG.envelope, 'power', 0.5, 4, 0.1)
+  .name('曲线指数')
+  .onChange(v => updateUniform('uEnvelopePower', v));
+
+// --- 旋转设置 ---
+const rotationFolder = gui.addFolder('🔄 旋转 (Rotation)');
+rotationFolder.add(CONFIG.rotation, 'noiseScale', 0.001, 0.02, 0.001)
+  .name('噪声缩放')
+  .onChange(v => updateUniform('uRotNoiseScale', v));
+rotationFolder.add(CONFIG.rotation, 'noiseSpeed', 0, 2, 0.1)
+  .name('噪声速度')
+  .onChange(v => updateUniform('uRotNoiseSpeed', v));
+rotationFolder.add(CONFIG.rotation, 'maxOffset', 0, 1.5, 0.05)
+  .name('最大偏移(弧度)')
+  .onChange(v => updateUniform('uRotMaxOffset', v));
+
+// --- 短棒尺寸 ---
+const rodFolder = gui.addFolder('📏 短棒尺寸 (Rod Size)');
+rodFolder.add(CONFIG.rod, 'baseLength', 1, 20, 0.5)
+  .name('基础长度')
+  .onChange(v => updateUniform('uRodBaseLen', v));
+rodFolder.add(CONFIG.rod, 'maxLengthAdd', 0, 50, 1)
+  .name('额外长度')
+  .onChange(v => updateUniform('uRodMaxLen', v));
+rodFolder.add(CONFIG.rod, 'baseThickness', 1, 10, 0.5)
+  .name('基础粗细')
+  .onChange(v => updateUniform('uRodBaseThick', v));
+rodFolder.add(CONFIG.rod, 'maxThicknessAdd', 0, 10, 0.5)
+  .name('额外粗细')
+  .onChange(v => updateUniform('uRodMaxThick', v));
+
+// --- 位移效果 ---
+const dispFolder = gui.addFolder('💨 位移效果 (Displacement)');
+dispFolder.add(CONFIG.displacement, 'pushStrength', 0, 200, 5)
+  .name('推力强度')
+  .onChange(v => updateUniform('uPushStrength', v));
+dispFolder.add(CONFIG.displacement, 'zLift', 0, 150, 5)
+  .name('Z轴抬升')
+  .onChange(v => updateUniform('uZLift', v));
+
+// --- 可见度 ---
+const visFolder = gui.addFolder('👁️ 可见度 (Visibility)');
+visFolder.add(CONFIG.visibility, 'base', 0, 0.5, 0.01)
+  .name('基础可见度')
+  .onChange(v => updateUniform('uVisBase', v));
+visFolder.add(CONFIG.visibility, 'waveMin', 0, 0.5, 0.01)
+  .name('波浪最低')
+  .onChange(v => updateUniform('uVisWaveMin', v));
+visFolder.add(CONFIG.visibility, 'waveMax', 0.5, 1, 0.01)
+  .name('波浪增益')
+  .onChange(v => updateUniform('uVisWaveMax', v));
+
+// --- 高亮 ---
+const highlightFolder = gui.addFolder('✨ 高亮 (Highlight)');
+highlightFolder.add(CONFIG.highlight, 'threshold', 0, 1, 0.05)
+  .name('触发阈值')
+  .onChange(v => updateUniform('uHighlightThreshold', v));
+highlightFolder.add(CONFIG.highlight, 'boost', 0, 2, 0.1)
+  .name('增益强度')
+  .onChange(v => updateUniform('uHighlightBoost', v));
+
+// --- 其他设置 ---
+const otherFolder = gui.addFolder('⚙️ 其他 (Other)');
+otherFolder.add(CONFIG, 'mouseLerpSpeed', 0.01, 0.2, 0.01)
+  .name('鼠标跟随速度');
+
+// ============================================================================
+// 快捷键支持
+// ============================================================================
+window.addEventListener('keydown', (e) => {
+  // P 键切换配置面板
+  if (e.key === 'p' || e.key === 'P') {
+    if (gui._closed) {
+      gui.open();
+    } else {
+      gui.close();
+    }
+  }
+});
