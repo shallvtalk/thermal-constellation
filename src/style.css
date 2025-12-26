@@ -59,6 +59,15 @@ p {
   letter-spacing: 1px;
 }
 
+/* 默认隐藏触摸提示，显示桌面提示 */
+.touch-hint {
+  display: none;
+}
+
+.desktop-hint {
+  display: inline;
+}
+
 .lil-closed {
   opacity: 0.2;
   font-size: 0.75rem;
@@ -76,4 +85,103 @@ kbd {
   border: 1px solid rgba(59, 102, 242, 0.3);
   border-radius: 4px;
   margin: 0 0.1em;
+}
+
+/* ============================================================================
+   移动端适配
+============================================================================ */
+
+/* 平板设备 */
+@media (max-width: 1024px) {
+  .ui-overlay {
+    bottom: 2rem;
+    left: 2rem;
+  }
+
+  h1 {
+    font-size: 2.5rem;
+    letter-spacing: -1.5px;
+  }
+
+  .accent {
+    width: 160px;
+  }
+}
+
+/* 手机设备 */
+@media (max-width: 768px) {
+  .ui-overlay {
+    bottom: 1.5rem;
+    left: 1.5rem;
+    right: 1.5rem;
+  }
+
+  h1 {
+    font-size: 2rem;
+    letter-spacing: -1px;
+  }
+
+  .accent {
+    width: 130px;
+  }
+
+  p {
+    font-size: 0.75rem;
+  }
+
+  /* 隐藏快捷键提示 - 移动端没有键盘 */
+  .shortcut-hint {
+    display: none;
+  }
+}
+
+/* 小屏手机 */
+@media (max-width: 480px) {
+  .ui-overlay {
+    bottom: 1rem;
+    left: 1rem;
+    right: 1rem;
+  }
+
+  h1 {
+    font-size: 1.75rem;
+    letter-spacing: -0.5px;
+    margin-bottom: 0.25rem;
+  }
+
+  .accent {
+    width: 110px;
+  }
+
+  p {
+    font-size: 0.7rem;
+  }
+}
+
+/* 触摸设备优化 */
+@media (hover: none) and (pointer: coarse) {
+
+  /* 切换提示文字 */
+  .touch-hint {
+    display: inline;
+  }
+
+  .desktop-hint {
+    display: none;
+  }
+
+  /* 隐藏快捷键提示 - 触摸设备 */
+  .shortcut-hint {
+    display: none;
+  }
+
+  /* lil-gui 在移动端调整 */
+  .lil-gui {
+    --width: 280px;
+    font-size: 12px;
+  }
+
+  .lil-gui .title {
+    font-size: 13px;
+  }
 }

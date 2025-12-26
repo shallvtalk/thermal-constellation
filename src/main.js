@@ -3,12 +3,25 @@ import * as THREE from 'three';
 import GUI from 'lil-gui';
 
 // ============================================================================
+// 移动端检测
+// ============================================================================
+const isTouchDevice = () => {
+  return ('ontouchstart' in window) ||
+    (navigator.maxTouchPoints > 0) ||
+    (navigator.msMaxTouchPoints > 0);
+};
+
+const isMobile = () => {
+  return window.innerWidth <= 768 || isTouchDevice();
+};
+
+// ============================================================================
 // 配置参数 - 所有可调节的系数都在这里
 // ============================================================================
 const CONFIG = {
   // --- 基础设置 ---
-  gridSpacing: 40,              // 网格间距 (像素)
-  gridSize: 3000,               // 网格总大小 (像素)
+  gridSpacing: isMobile() ? 50 : 40,              // 网格间距 (像素) - 移动端更大以提升性能
+  gridSize: isMobile() ? 2000 : 3000,             // 网格总大小 (像素) - 移动端更小
   positionRandomness: 0.6,      // 位置随机偏移 (相对于间距的比例, 0-1)
   color: 0x3b66f2,              // 短棒颜色 (十六进制)
   backgroundColor: 0xf4f7f6,    // 背景颜色 (十六进制)
@@ -450,14 +463,35 @@ const targetMouse = new THREE.Vector2(0, 0);
 const raycaster = new THREE.Raycaster();
 const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 
-window.addEventListener('mousemove', (e) => {
-  const ncX = (e.clientX / window.innerWidth) * 2 - 1;
-  const ncY = -(e.clientY / window.innerHeight) * 2 + 1;
+// 通用坐标转换函数
+function updateMousePosition(clientX, clientY) {
+  const ncX = (clientX / window.innerWidth) * 2 - 1;
+  const ncY = -(clientY / window.innerHeight) * 2 + 1;
   raycaster.setFromCamera(new THREE.Vector2(ncX, ncY), camera);
   const intersect = new THREE.Vector3();
   raycaster.ray.intersectPlane(plane, intersect);
   targetMouse.copy(intersect);
+}
+
+// 鼠标事件
+window.addEventListener('mousemove', (e) => {
+  updateMousePosition(e.clientX, e.clientY);
 });
+
+// 触摸事件支持
+window.addEventListener('touchstart', (e) => {
+  if (e.touches.length > 0) {
+    const touch = e.touches[0];
+    updateMousePosition(touch.clientX, touch.clientY);
+  }
+}, { passive: true });
+
+window.addEventListener('touchmove', (e) => {
+  if (e.touches.length > 0) {
+    const touch = e.touches[0];
+    updateMousePosition(touch.clientX, touch.clientY);
+  }
+}, { passive: true });
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
